@@ -1,4 +1,4 @@
-package cx.matthew.cpsc323;
+package cx.matthew.cpsc323.lexer;
 
 /**
  * A token created by the lexer from a given input string.

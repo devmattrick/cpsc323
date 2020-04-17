@@ -1,9 +1,6 @@
-package cx.matthew.cpsc323;
+package cx.matthew.cpsc323.lexer;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.List;
+import java.util.*;
 
 public class Lexer {
 
@@ -33,8 +30,8 @@ public class Lexer {
             /* Reject    */ {State.REJECT,  State.REJECT,  State.REJECT,  State.REJECT,  State.REJECT,  State.REJECT,   State.REJECT,    State.REJECT,   State.REJECT}
     };
 
-    public List<Token> lex(String input) {
-        List<Token> tokens = new ArrayList<>();
+    public Queue<Token> lex(String input) {
+        Queue<Token> tokens = new ArrayDeque<>();
 
         int line = 1;
         int col = 1;
@@ -66,7 +63,8 @@ public class Lexer {
             }
 
             if (prev == State.COMMENT && next != State.COMMENT) {
-                tokens.add(new Token(Token.Type.COMMENT, buffer + c));
+                // No longer add comments to token queue
+                // tokens.add(new Token(Token.Type.COMMENT, buffer + c));
                 buffer = "";
             }
 
@@ -94,6 +92,16 @@ public class Lexer {
                 line++;
                 col = 1;
             }
+        }
+
+        // Fixes a bug where if there's not a newline at the end of file the final identifier wouldn't be recognized
+        if (prev == State.STRING) {
+            if (KEYWORDS.contains(buffer)) {
+                tokens.add(new Token(Token.Type.KEYWORD, buffer));
+            } else {
+                tokens.add(new Token(Token.Type.IDENTIFIER, buffer));
+            }
+
         }
 
         return tokens;
