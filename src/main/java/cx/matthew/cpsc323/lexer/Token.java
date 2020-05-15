@@ -1,11 +1,13 @@
 package cx.matthew.cpsc323.lexer;
 
+import java.util.Objects;
+
 /**
  * A token created by the lexer from a given input string.
  */
 public class Token {
-    private Type type;
-    private String lexeme;
+    private final Type type;
+    private final String lexeme;
 
     public Token(Type type, String lexeme) {
         this.type = type;
@@ -20,6 +22,20 @@ public class Token {
         return lexeme;
     }
 
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        Token token = (Token) o;
+        return type == token.type &&
+                Objects.equals(lexeme, token.lexeme);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(type, lexeme);
+    }
+
     /**
      * The type of the token.
      */
@@ -32,7 +48,7 @@ public class Token {
         REAL("Real"),
         COMMENT("Comment");
 
-        private String name;
+        private final String name;
         Type(String name) {
             this.name = name;
         }

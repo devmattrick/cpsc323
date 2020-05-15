@@ -1,187 +1,313 @@
 package cx.matthew.cpsc323.parser;
 
 import cx.matthew.cpsc323.lexer.Token;
-import cx.matthew.cpsc323.parser.tree.AST;
-import cx.matthew.cpsc323.parser.tree.nodes.*;
 
-import java.util.Queue;
+import java.util.*;
+import java.util.stream.Collectors;
 
 public class Parser {
 
-    private Queue<Token> tokens;
+    private final Queue<Token> tokens;
+    private final List<Instruction> instructions = new ArrayList<>();
+    private final SymbolTable symbolTable = new SymbolTable();
+    private int instructionLocation = 0;
+    private final Stack<Integer> jumpStack = new Stack<>();
 
     public Parser(Queue<Token> tokens) {
-        this.tokens = tokens;
+        // Filter out comment tokens
+        this.tokens = tokens.stream().filter((token -> token.getType() != Token.Type.COMMENT))
+                .collect(Collectors.toCollection(ArrayDeque::new));
     }
 
-    public AST parse() {
-        return new AST(parseStatementList());
+    public List<Instruction> getInstructions() {
+        return instructions;
     }
 
-    private ASTNodeStatementList parseStatementList() {
-        Token token = tokens.peek();
-
-        if (token == null) {
-            return new ASTNodeStatementListEpsilon();
-        }
-
-        ASTNodeStatement statement = parseStatement();
-        Token semi = tokens.remove();
-
-        if (semi.getType() != Token.Type.SEPARATOR || !semi.getLexeme().equals(";")) {
-            throw new IllegalStateException("Missing semicolon");
-        }
-
-        return new ASTNodeStatementListNormal(statement, semi, parseStatementList());
+    public SymbolTable getSymbolTable() {
+        return symbolTable;
     }
 
-    private ASTNodeStatement parseStatement() {
+    public void parse() {
+        parseStatementList();
+    }
+
+    private void parseStatementList() {
+        // If there are no tokens left, we're at the end of a statement list
+        if (tokens.size() == 0) return;
+
+        // If token is "}", we assume we're at the end of a block
+        if (isToken(tokens.peek(), Token.Type.SEPARATOR, "}")) return;
+
+        // Parse a statement
+        parseStatement();
+
+        // Parse another statement list
+        parseStatementList();
+    }
+
+    private void parseStatement() {
+        // If the next token is an ID token, then we have an assignment statement
         Token peek = tokens.peek();
 
-        if (peek == null) {
-            return null;
+        if (isType(peek, Token.Type.IDENTIFIER)) {
+            parseAssign();
+
+            // Expect a semicolon after a statement
+            requireToken(tokens.poll(), Token.Type.SEPARATOR, ";");
+        } else if (isToken(peek, Token.Type.KEYWORD, "while")) {
+            parseWhileStatement();
+        } else if (isToken(peek, Token.Type.KEYWORD, "if")) {
+            parseIfStatement();
+        } else {
+            parseDeclarativeList();
+
+            // Expect a semicolon after a statement
+            requireToken(tokens.poll(), Token.Type.SEPARATOR, ";");
+        }
+    }
+
+    private void parseAssign() {
+        Token ident = tokens.peek();
+        parseID();
+
+        if (ident == null) {
+            throw new RuntimeException("Missing ID token");
         }
 
-        if (peek.getType() == Token.Type.IDENTIFIER) {
-            return new ASTNodeStatementAssign(parseAssign());
+        if (!isToken(tokens.poll(), Token.Type.OPERATOR, "=")) {
+            throw new RuntimeException("Missing '='");
         }
 
-        return new ASTNodeStatementDeclarative(parseDeclarative());
+        parseExpression();
+        addInstruction("POPM", symbolTable.lookup(new Symbol(Symbol.Type.INTEGER, ident.getLexeme())));
     }
 
-    private ASTNodeAssign parseAssign() {
-        ASTNodeID id = parseID();
-        Token token = tokens.remove();
+    private void parseWhileStatement() {
+        requireToken(tokens.poll(), Token.Type.KEYWORD, "while");
+        int labelLocation = instructionLocation;
+        addInstruction("LABEL");
 
-        if (token.getType() != Token.Type.OPERATOR || !token.getLexeme().equals("=")) {
-            throw new IllegalStateException("Expected '=', got " + token.getLexeme());
+        requireToken(tokens.poll(), Token.Type.SEPARATOR, "(");
+        parseComparison();
+        requireToken(tokens.poll(), Token.Type.SEPARATOR, ")");
+
+        requireToken(tokens.poll(), Token.Type.SEPARATOR, "{");
+        parseStatementList();
+        requireToken(tokens.poll(), Token.Type.SEPARATOR, "}");
+
+        addInstruction("JUMP", labelLocation);
+        backPatch(instructionLocation);
+        addInstruction("LABEL");
+    }
+
+    private void parseIfStatement() {
+        requireToken(tokens.poll(), Token.Type.KEYWORD, "if");
+
+        requireToken(tokens.poll(), Token.Type.SEPARATOR, "(");
+        parseComparison();
+        requireToken(tokens.poll(), Token.Type.SEPARATOR, ")");
+
+        requireToken(tokens.poll(), Token.Type.SEPARATOR, "{");
+        parseStatementList();
+        backPatch(instructionLocation);
+        requireToken(tokens.poll(), Token.Type.SEPARATOR, "}");
+        addInstruction("LABEL");
+    }
+
+    private void parseComparison() {
+        parseExpression();
+        Token token = tokens.poll();
+        parseExpression();
+
+        if (isToken(token, Token.Type.OPERATOR, "==")) {
+            addInstruction("EQU");
+            jumpStack.push(instructionLocation);
+            addInstruction("JUMPZ");
+        } else if (isToken(token, Token.Type.OPERATOR, "!=")) {
+            addInstruction("NEQ");
+            jumpStack.push(instructionLocation);
+            addInstruction("JUMPZ");
+        } else if (isToken(token, Token.Type.OPERATOR, ">")) {
+            addInstruction("GRT");
+            jumpStack.push(instructionLocation);
+            addInstruction("JUMPZ");
+        } else if (isToken(token, Token.Type.OPERATOR, "<")) {
+            addInstruction("LES");
+            jumpStack.push(instructionLocation);
+            addInstruction("JUMPZ");
+        } else if (isToken(token, Token.Type.OPERATOR, ">=")) {
+            addInstruction("GEQ");
+            jumpStack.push(instructionLocation);
+            addInstruction("JUMPZ");
+        } else if (isToken(token, Token.Type.OPERATOR, "<=")) {
+            addInstruction("LEQ");
+            jumpStack.push(instructionLocation);
+            addInstruction("JUMPZ");
+        } else if (token != null) {
+            throw new RuntimeException("Expected comparison operator, got '" + token.getLexeme() + "'");
+        } else {
+            throw new RuntimeException("Missing comparison operator");
+        }
+    }
+
+    private void parseDeclarativeList() {
+        parseDeclarative();
+
+        if (isToken(tokens.peek(), Token.Type.SEPARATOR, ",")) {
+            tokens.remove();
+            parseInnerDeclarativeList();
+        }
+    }
+
+    private void parseInnerDeclarativeList() {
+        Token ident = tokens.peek();
+        parseID();
+
+        if (ident == null) {
+            throw new RuntimeException("Missing ID token");
         }
 
-        return new ASTNodeAssign(id, token, parseExpression());
-    }
+        int addr = symbolTable.insert(new Symbol(Symbol.Type.INTEGER, ident.getLexeme()));
 
-    private ASTNodeDeclarative parseDeclarative() {
-        ASTNodeType type = parseType();
-        ASTNodeID id = parseID();
-        Token equals = tokens.remove();
-
-        if (equals.getType() != Token.Type.OPERATOR || !equals.getLexeme().equals("=")) {
-            throw new IllegalStateException("Expected '=', got " + equals.getLexeme());
+        if (isToken(tokens.peek(), Token.Type.OPERATOR, "=")) {
+            tokens.remove();
+            parseExpression();
+            addInstruction("POPM", addr);
         }
 
-        return new ASTNodeDeclarative(type, id, equals, parseExpression());
+        if (isToken(tokens.peek(), Token.Type.SEPARATOR, ",")) {
+            tokens.remove();
+            parseInnerDeclarativeList();
+        }
     }
 
-    private ASTNodeExpression parseExpression() {
-        return new ASTNodeExpression(parseTerm(), parseExpressionPrime());
-    }
+    private void parseDeclarative() {
+        parseType();
 
-    private ASTNodeExpressionPrime parseExpressionPrime () {
-        Token token = tokens.peek();
+        Token ident = tokens.peek();
+        parseID();
 
-        if (token != null) {
-            if (token.getType() == Token.Type.OPERATOR) {
-                if (token.getLexeme().equals("+")) {
-                    tokens.remove();
-                    return new ASTNodeExpressionPrimeAdditive(token, parseTerm(), parseExpressionPrime());
-                }
-
-                if (token.getLexeme().equals("-")) {
-                    tokens.remove();
-                    return new ASTNodeExpressionPrimeSubtractive(token, parseTerm(), parseExpressionPrime());
-                }
-            }
+        if (ident == null) {
+            throw new RuntimeException("Missing ID token");
         }
 
-        return new ASTNodeExpressionPrimeEpsilon();
-    }
+        int addr = symbolTable.insert(new Symbol(Symbol.Type.INTEGER, ident.getLexeme()));
 
-    private ASTNodeTerm parseTerm() {
-        return new ASTNodeTerm(parseFactor(), parseTermPrime());
-    }
-
-    private ASTNodeTermPrime parseTermPrime() {
-        Token token = tokens.peek();
-
-        if (token != null) {
-            if (token.getType() == Token.Type.OPERATOR) {
-                if (token.getLexeme().equals("*")) {
-                    tokens.remove();
-                    return new ASTNodeTermPrimeMultiplicative(token, parseFactor(), parseTermPrime());
-                }
-
-                if (token.getLexeme().equals("/")) {
-                    tokens.remove();
-                    return new ASTNodeTermPrimeDivisive(token, parseFactor(), parseTermPrime());
-                }
-            }
+        if (isToken(tokens.peek(), Token.Type.OPERATOR, "=")) {
+            tokens.remove();
+            parseExpression();
+            addInstruction("POPM", addr);
         }
-
-        return new ASTNodeTermPrimeEpsilon();
     }
 
-    private ASTNodeFactor parseFactor() {
+    private void parseExpression() {
+        parseTerm();
+        parseExpressionPrime();
+    }
+
+    private void parseExpressionPrime() {
+        Token op = tokens.peek();
+
+        if (isToken(op, Token.Type.OPERATOR, "+")) {
+            tokens.remove();
+            parseTerm();
+            addInstruction("ADD");
+            parseExpressionPrime();
+        } else if (isToken(op, Token.Type.OPERATOR, "-")) {
+            tokens.remove();
+            parseTerm();
+            addInstruction("SUB");
+            parseExpressionPrime();
+        }
+    }
+
+    private void parseTerm() {
+        parseFactor();
+        parseTermPrime();
+    }
+
+    private void parseTermPrime() {
+        Token op = tokens.peek();
+
+        if (isToken(op, Token.Type.OPERATOR, "*")) {
+            tokens.remove();
+            parseFactor();
+            addInstruction("MUL");
+            parseTermPrime();
+        } else if (isToken(op, Token.Type.OPERATOR, "/")) {
+            tokens.remove();
+            parseFactor();
+            addInstruction("DIV");
+            parseTermPrime();
+        }
+    }
+
+    private void parseFactor() {
         Token peek = tokens.peek();
 
-        if (peek == null) {
-            throw new IllegalStateException("Expected a factor, got EOF");
+        if (isToken(peek, Token.Type.SEPARATOR, "(")) {
+            tokens.remove();
+            parseExpression();
+
+            requireToken(tokens.poll(), Token.Type.SEPARATOR, ")");
+        } else if (isType(peek, Token.Type.IDENTIFIER)) {
+            parseID();
+            addInstruction("PUSHM", symbolTable.lookup(new Symbol(Symbol.Type.INTEGER, peek.getLexeme())));
+        } else if (isType(peek, Token.Type.INTEGER)) {
+            parseNum();
+            addInstruction("PUSHI", peek.getLexeme());
+        } else {
+            throw new RuntimeException("Expected expression, identifier, or number");
         }
-
-        if (peek.getType() == Token.Type.SEPARATOR) {
-            if (peek.getLexeme().equals("(")) {
-                Token paren1 = tokens.remove();
-                ASTNodeExpression exp = parseExpression();
-                Token paren2 = tokens.remove();
-
-                if (paren2.getType() == Token.Type.SEPARATOR) {
-                    if (paren2.getLexeme().equals(")")) {
-                        return new ASTNodeFactorParentheticalExpression(paren1, exp, paren2);
-                    }
-                }
-
-                throw new IllegalStateException("Expected close paren, got " + paren2.getLexeme());
-            }
-        }
-
-        if (peek.getType() == Token.Type.IDENTIFIER) {
-            return new ASTNodeFactorID(parseID());
-        }
-
-        if (peek.getType() == Token.Type.INTEGER || peek.getType() == Token.Type.REAL) {
-            return new ASTNodeFactorNum(parseNum());
-        }
-
-        throw new IllegalStateException("Expected open paren, identifier, or integer, got " + peek.getType().getName());
     }
 
-    private ASTNodeID parseID() {
-        Token token = tokens.remove();
-
-        if (token.getType() != Token.Type.IDENTIFIER) {
-            throw new IllegalStateException("Expected identifier, got " + token.getType().getName());
-        }
-
-        return new ASTNodeID(token);
+    private void parseID() {
+        requireType(tokens.poll(), Token.Type.IDENTIFIER);
     }
 
-    private ASTNodeNum parseNum() {
-        Token token = tokens.remove();
-
-        if (token.getType() == Token.Type.INTEGER || token.getType() == Token.Type.REAL) {
-            return new ASTNodeNum(token);
-        }
-
-        throw new IllegalStateException("Expected integer or real, got " + token.getType().getName());
+    private void parseNum() {
+        requireType(tokens.poll(), Token.Type.INTEGER);
     }
 
-    private ASTNodeType parseType() {
-        Token token = tokens.remove();
+    private void parseType() {
+        requireType(tokens.poll(), Token.Type.KEYWORD);
+    }
 
-        if (token.getType() != Token.Type.KEYWORD) {
-            throw new IllegalStateException("Expected keyword, got " + token.getType().getName());
+    private boolean isType(Token token, Token.Type type) {
+        return token != null && token.getType() == type;
+    }
+
+    private boolean isToken(Token token, Token.Type type, String lexeme) {
+        return isType(token, type) && token.getLexeme().equals(lexeme);
+    }
+
+    private void requireType(Token token, Token.Type type) {
+        if (!isType(token, type)) {
+            throw new RuntimeException(String.format("Expected type %s, got %s", type.getName(), token.getType().getName()));
         }
+    }
 
-        return new ASTNodeType(token);
+    private void requireToken(Token token, Token.Type type, String lexeme) {
+        if (!isToken(token, type, lexeme)) {
+            throw new RuntimeException(String.format("Expected %s, got %s", lexeme, token.getLexeme()));
+        }
+    }
+
+    private void addInstruction(String op) {
+        addInstruction(op, null);
+    }
+
+    private void addInstruction(String op, int arg) {
+        addInstruction(op, String.valueOf(arg));
+    }
+
+    private void addInstruction(String op, String arg) {
+        instructions.add(new Instruction(instructionLocation++, op, arg));
+    }
+
+    private void backPatch(int jumpLocation) {
+        Instruction instruction = instructions.get(jumpStack.pop());
+        instruction.setArgument(String.valueOf(jumpLocation));
     }
 
 }

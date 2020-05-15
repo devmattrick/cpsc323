@@ -2,14 +2,13 @@ package cx.matthew.cpsc323;
 
 import cx.matthew.cpsc323.lexer.Lexer;
 import cx.matthew.cpsc323.lexer.Token;
+import cx.matthew.cpsc323.parser.Instruction;
 import cx.matthew.cpsc323.parser.Parser;
-import cx.matthew.cpsc323.parser.tree.AST;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.Queue;
-import java.util.stream.Collectors;
 
 public class Main {
 
@@ -24,19 +23,15 @@ public class Main {
             Lexer lexer = new Lexer();
 
             Queue<Token> tokens = lexer.lex(input);
-
-            System.out.println("LEXER RESULTS: ");
-            String output = String.format("%-10s | %s\n\n", "TOKEN", "LEXEME");
-            output += tokens.stream()
-                    .map(token -> String.format("%-10s | %s\n", token.getType().getName(), token.getLexeme()))
-                    .collect(Collectors.joining());
-            System.out.println(output);
-
-            System.out.println("PARSER RESULTS: ");
             Parser parser = new Parser(tokens);
-            AST ast = parser.parse();
 
-            ast.print();
+            parser.parse();
+
+            System.out.println("INSTRUCTIONS:");
+            parser.getInstructions().forEach((Instruction::print));
+
+            System.out.println("\nSYMBOL TABLE:");
+            parser.getSymbolTable().print();
         } catch (IOException e) {
             e.printStackTrace();
         }

@@ -1,12 +1,9 @@
+int i = 0;
+int max = 100;
+while (i < max) {
+    i = i + 1;
+}
 
-! this is comment for this sample test code the %% is optional to start!
-
-
-
-
-
-
-x=a + b;
-z=c+ d;
-a=e-f;
-b=g*n;
+if (i > 0) {
+    i = 1;
+}
